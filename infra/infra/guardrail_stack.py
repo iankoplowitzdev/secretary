@@ -197,10 +197,9 @@ class GuardrailStack(Stack):
             "Guardrail",
             name=GUARDRAIL_NAME,
             description=(
-                "Guardrail for the secretary chatbot: blocks prompt-injection/"
-                "jailbreak attempts, restricts conversation to career/background "
-                "Q&A about Ian Koplowitz, and blocks/anonymizes PII beyond what's "
-                "expected in the Knowledge Base."
+                "Secretary chatbot guardrail: blocks jailbreaks, restricts "
+                "conversation to career/background Q&A about Ian Koplowitz, "
+                "blocks/anonymizes PII beyond the Knowledge Base."
             ),
             blocked_input_messaging=(
                 "I can't help with that request. I'm here to answer questions "
