@@ -1,6 +1,7 @@
 from aws_cdk import (
     Stack,
     RemovalPolicy,
+    CfnOutput,
     aws_s3 as s3,
     aws_s3vectors as s3vectors,
     aws_bedrock as bedrock,
@@ -43,11 +44,18 @@ class KnowledgeBaseStack(Stack):
         vector_index = s3vectors.CfnIndex(
             self,
             "KbVectorIndex",
-            index_name="secretary-kb-index",
+            index_name="secretary-kb-index-v2",
             vector_bucket_name=vector_bucket.vector_bucket_name,
             data_type="float32",
             dimension=EMBEDDING_DIMENSION,
             distance_metric="cosine",
+            # Bedrock stores each chunk's source text under this reserved metadata
+            # key. Filterable metadata is capped at 2KB/vector in S3 Vectors, which
+            # source text chunks can easily exceed, so it must be marked
+            # non-filterable (we don't need to query on it, just retrieve it).
+            metadata_configuration=s3vectors.CfnIndex.MetadataConfigurationProperty(
+                non_filterable_metadata_keys=["AMAZON_BEDROCK_TEXT"],
+            ),
         )
         vector_index.add_dependency(vector_bucket)
 
@@ -90,7 +98,7 @@ class KnowledgeBaseStack(Stack):
         knowledge_base = bedrock.CfnKnowledgeBase(
             self,
             "KnowledgeBase",
-            name="secretary-knowledge-base",
+            name="secretary-knowledge-base-v2",
             role_arn=kb_role.role_arn,
             knowledge_base_configuration=bedrock.CfnKnowledgeBase.KnowledgeBaseConfigurationProperty(
                 type="VECTOR",
@@ -109,7 +117,7 @@ class KnowledgeBaseStack(Stack):
         knowledge_base.node.add_dependency(kb_role)
 
         # --- Data source (S3, fixed-size chunking) ---
-        bedrock.CfnDataSource(
+        data_source = bedrock.CfnDataSource(
             self,
             "KbDataSource",
             knowledge_base_id=knowledge_base.attr_knowledge_base_id,
@@ -178,3 +186,7 @@ class KnowledgeBaseStack(Stack):
         )
 
         self.knowledge_base_id = knowledge_base.attr_knowledge_base_id
+
+        CfnOutput(self, "KbSourceBucketName", value=source_bucket.bucket_name)
+        CfnOutput(self, "KnowledgeBaseId", value=knowledge_base.attr_knowledge_base_id)
+        CfnOutput(self, "KbDataSourceId", value=data_source.attr_data_source_id)
