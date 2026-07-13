@@ -5,6 +5,7 @@ import aws_cdk as cdk
 
 from infra.infra_stack import InfraStack
 from infra.knowledge_base_stack import KnowledgeBaseStack
+from infra.guardrail_stack import GuardrailStack
 
 
 app = cdk.App()
@@ -14,6 +15,8 @@ env = cdk.Environment(
 )
 
 KnowledgeBaseStack(app, "KnowledgeBaseStack", env=env)
+
+GuardrailStack(app, "GuardrailStack", env=env)
 
 InfraStack(app, "InfraStack",
     # If you don't specify 'env', this stack will be environment-agnostic.
