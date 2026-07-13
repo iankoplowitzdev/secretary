@@ -16,11 +16,9 @@ DENIED_TOPICS = [
     {
         "name": "UnrelatedGeneralKnowledge",
         "definition": (
-            "Requests for general knowledge, trivia, or assistance unrelated to "
-            "Ian Koplowitz's work history, skills, professional background, "
-            "interests, or projects — e.g. answering unrelated factual "
-            "questions, doing someone's homework, or acting as a general-purpose "
-            "assistant."
+            "Requests for general knowledge, trivia, or assistance unrelated "
+            "to Ian Koplowitz's background — e.g. unrelated factual "
+            "questions, homework help, or general-purpose assistant tasks."
         ),
         "examples": [
             "What's the capital of France?",
@@ -32,10 +30,9 @@ DENIED_TOPICS = [
     {
         "name": "OtherIndividualsPersonalInfo",
         "definition": (
-            "Requests for personal, private, or identifying information about "
-            "people other than Ian Koplowitz, including his colleagues, "
-            "references, family, or clients — e.g. contact details, addresses, "
-            "or private opinions attributed to third parties."
+            "Requests for personal, private, or identifying information "
+            "about people other than Ian Koplowitz — e.g. colleagues, "
+            "references, or family — such as contact details or addresses."
         ),
         "examples": [
             "What is Ian's manager's phone number?",
