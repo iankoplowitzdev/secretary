@@ -4,9 +4,17 @@ import os
 import aws_cdk as cdk
 
 from infra.infra_stack import InfraStack
+from infra.knowledge_base_stack import KnowledgeBaseStack
 
 
 app = cdk.App()
+
+env = cdk.Environment(
+    account=os.getenv("CDK_DEFAULT_ACCOUNT"), region=os.getenv("CDK_DEFAULT_REGION")
+)
+
+KnowledgeBaseStack(app, "KnowledgeBaseStack", env=env)
+
 InfraStack(app, "InfraStack",
     # If you don't specify 'env', this stack will be environment-agnostic.
     # Account/Region-dependent features and context lookups will not work,
