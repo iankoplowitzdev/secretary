@@ -7,12 +7,55 @@ Run locally:
 """
 
 import argparse
+import os
 import sys
+from functools import lru_cache
 
+import boto3
 from strands import Agent
 from strands.models import BedrockModel
 
 from my_agent.tools.kb_retrieve import kb_retrieve
+
+DEFAULT_REGION = "us-east-1"
+GUARDRAIL_STACK_NAME = "GuardrailStack"
+
+
+@lru_cache(maxsize=1)
+def _resolve_guardrail() -> tuple[str, str]:
+    """Resolve the live Guardrail ID and version.
+
+    Same pattern as kb_retrieve._resolve_knowledge_base_id: never hardcode a
+    Bedrock resource ID, since these stacks have already required replacement
+    (and a new resource ID) at least once each during earlier stories.
+
+    Preference order:
+    1. ``GUARDRAIL_ID`` / ``GUARDRAIL_VERSION`` environment variables (explicit override).
+    2. The ``GuardrailIdOutput`` / ``GuardrailVersionOutput`` outputs of the
+       ``GuardrailStack`` CloudFormation stack (or ``GUARDRAIL_STACK_NAME`` if set).
+    """
+    env_id = os.environ.get("GUARDRAIL_ID")
+    env_version = os.environ.get("GUARDRAIL_VERSION")
+    if env_id and env_version:
+        return env_id, env_version
+
+    region = os.environ.get("KB_REGION") or os.environ.get("AWS_REGION") or DEFAULT_REGION
+    stack_name = os.environ.get("GUARDRAIL_STACK_NAME", GUARDRAIL_STACK_NAME)
+
+    cfn = boto3.client("cloudformation", region_name=region)
+    response = cfn.describe_stacks(StackName=stack_name)
+    outputs = response["Stacks"][0].get("Outputs", [])
+    values = {o["OutputKey"]: o["OutputValue"] for o in outputs}
+
+    guardrail_id = values.get("GuardrailIdOutput")
+    guardrail_version = values.get("GuardrailVersionOutput")
+    if not guardrail_id or not guardrail_version:
+        raise RuntimeError(
+            f"Could not find 'GuardrailIdOutput'/'GuardrailVersionOutput' on "
+            f"CloudFormation stack '{stack_name}' in region '{region}'. Set "
+            f"GUARDRAIL_ID and GUARDRAIL_VERSION environment variables to override."
+        )
+    return guardrail_id, guardrail_version
 
 # Amazon Nova Lite cross-region inference profile. AWS-native model — no
 # Anthropic use-case attestation required (unlike Claude Haiku 4.5, which
@@ -27,6 +70,16 @@ MODEL_ID = "us.amazon.nova-lite-v1:0"
 # a single constant so the persona and any tests/checks stay in sync.
 DEFLECTION_PHRASE = (
     "I can only discuss Ian Koplowitz's professional background, skills, and projects"
+)
+
+# Shown when the Bedrock Guardrail (US-6) intervenes on an input or output —
+# e.g. a detected prompt-injection/jailbreak attempt. Kept distinct from
+# DEFLECTION_PHRASE (the model's own scope refusal) so it's clear this came
+# from the guardrail layer, not the model choosing to decline.
+GUARDRAIL_BLOCK_PHRASE = (
+    "This request was blocked by a safety guardrail. "
+    + DEFLECTION_PHRASE
+    + "."
 )
 
 SYSTEM_PROMPT = f"""You are Ian Koplowitz's professional secretary — an AI assistant
@@ -65,8 +118,20 @@ learn about his work history, skills, interests, and projects.
 
 
 def build_agent() -> Agent:
-    """Construct the secretary Agent: Nova Lite + KB retrieval tool."""
-    model = BedrockModel(model_id=MODEL_ID)
+    """Construct the secretary Agent: Nova Lite + KB retrieval tool + guardrail."""
+    guardrail_id, guardrail_version = _resolve_guardrail()
+    model = BedrockModel(
+        model_id=MODEL_ID,
+        guardrail_id=guardrail_id,
+        guardrail_version=guardrail_version,
+        # Redact guardrail-blocked content from what's returned rather than
+        # letting a partial/raw response through when a block occurs, with a
+        # consistent, greppable message regardless of which side triggered.
+        guardrail_redact_input=True,
+        guardrail_redact_input_message=GUARDRAIL_BLOCK_PHRASE,
+        guardrail_redact_output=True,
+        guardrail_redact_output_message=GUARDRAIL_BLOCK_PHRASE,
+    )
     return Agent(
         model=model,
         tools=[kb_retrieve],

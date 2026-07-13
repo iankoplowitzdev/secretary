@@ -56,12 +56,16 @@ DENIED_TOPICS = [
 ]
 
 # PII entity types plausibly present in the Knowledge Base (resume / about-me
-# doc) that we allow through unmasked so the bot can answer legitimate
-# career questions (e.g. "what's a good way to reach Ian?"). Anything else is
-# blocked outright per the acceptance criteria ("blocks PII generation beyond
-# what's expected to be in the Knowledge Base").
-ALLOWED_PII_ANONYMIZE = ["EMAIL", "NAME", "URL"]
-
+# doc) that we want to pass through completely untouched, since the bot's
+# whole job is discussing this person by name (e.g. "what's a good way to
+# reach Ian?"). These are deliberately left OUT of pii_entities_config below
+# rather than set to ANONYMIZE: ANONYMIZE still replaces matches with a
+# placeholder (e.g. "{NAME}"), it does not mean "let it through" — using it
+# here caused the guardrail to redact "Ian" out of the model's own
+# tool-planning text mid-turn and truncate the response before it ever
+# called kb_retrieve. Omitting an entity type from the policy entirely is
+# the only way for it to pass through unmodified.
+#
 # Everything else gets BLOCK action via a broad denylist of common PII types
 # unlikely to legitimately appear in a resume/about-me doc.
 BLOCKED_PII_TYPES = [
@@ -164,20 +168,10 @@ class GuardrailStack(Stack):
             for topic in DENIED_TOPICS
         ]
 
-        # --- PII: block sensitive PII outright; anonymize the handful of
-        # entity types that are expected/benign in a resume/about-me KB
-        # (name, email, URL) rather than blocking the whole response. ---
+        # --- PII: block sensitive PII outright. Name/email/URL are
+        # deliberately absent from this config (see comment above
+        # BLOCKED_PII_TYPES) so they pass through completely untouched. ---
         pii_entities_config = [
-            bedrock.CfnGuardrail.PiiEntityConfigProperty(
-                type=pii_type,
-                action="ANONYMIZE",
-                input_action="ANONYMIZE",
-                output_action="ANONYMIZE",
-                input_enabled=True,
-                output_enabled=True,
-            )
-            for pii_type in ALLOWED_PII_ANONYMIZE
-        ] + [
             bedrock.CfnGuardrail.PiiEntityConfigProperty(
                 type=pii_type,
                 action="BLOCK",
@@ -223,13 +217,24 @@ class GuardrailStack(Stack):
         # amazon-bedrock skill's guardrails reference: DRAFT is mutable and
         # must never be used in production guardrailConfig — a numbered
         # version guarantees the agent's behavior can't change silently out
-        # from under it. A new CfnGuardrailVersion must be created (and the
-        # agent's config updated) any time this stack's policy config changes. ---
+        # from under it.
+        #
+        # IMPORTANT: CfnGuardrailVersion snapshots DRAFT at creation time and
+        # CloudFormation only cuts a new version when THIS resource's own
+        # properties change — updating the Guardrail's policy above does NOT
+        # automatically produce a new version, since `guardrail_identifier`
+        # and `description` are unchanged from CFN's point of view. Bump
+        # `description` (e.g. note what changed) any time the policy above
+        # changes, to force a new version — otherwise the running agent stays
+        # pinned to the stale, pre-change version. ---
         guardrail_version = bedrock.CfnGuardrailVersion(
             self,
             "GuardrailVersion",
             guardrail_identifier=guardrail.attr_guardrail_id,
-            description="Initial production version (US-6).",
+            description=(
+                "v2: stop ANONYMIZE-masking NAME/EMAIL/URL, which redacted "
+                "the bot's own subject out of its responses."
+            ),
         )
         guardrail_version.node.add_dependency(guardrail)
 
