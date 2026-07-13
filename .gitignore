@@ -1,0 +1,21 @@
+## Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+## CDK
+infra/cdk.out/
+infra/.venv/
+
+## Node / frontend
+node_modules/
+frontend/dist/
+npm-debug.log*
+
+## Misc
+.DS_Store
+.env
+.env.local
+*.log
