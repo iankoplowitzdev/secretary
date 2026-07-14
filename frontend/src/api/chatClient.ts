@@ -2,33 +2,34 @@
  * Chat transport boundary.
  *
  * This is the single seam between the chat UI and "however we actually talk
- * to the backend." Today it delegates to a local mock (`mockChatStream`) that
- * simulates a streaming response with no network involved, so `npm run dev`
- * gives a fully working conversational UI with no backend deployed.
- *
- * A future story (US-10, frontend/backend integration) swaps the body of
- * `sendChatMessage` for a real `fetch` against the streaming Lambda proxy
- * (US-8) and adapts its `Response.body` (already a ReadableStream) to the
- * same return type — no changes needed anywhere else in the app.
+ * to the backend." Uses the real streaming Lambda proxy (US-8) when
+ * VITE_FUNCTION_URL is configured; otherwise falls back to a local mock
+ * (`mockChatStream`) so `npm run dev` still gives a fully working
+ * conversational UI with no backend deployed (e.g. for pure UI iteration).
  */
 
 import { createMockChatStream } from './mockChatStream'
+import { createLiveChatStream } from './liveChatStream'
 
 export interface SendChatMessageRequest {
   message: string
   sessionId: string
 }
 
+const FUNCTION_URL = import.meta.env.VITE_FUNCTION_URL as string | undefined
+
 /**
  * Sends a chat message and returns a stream of response text chunks.
  *
- * Currently backed by an in-browser mock. Swap this implementation for a
- * real network call (e.g. `fetch(...).then(res => adaptToStringStream(res.body))`)
- * when a real backend endpoint exists.
+ * Backed by the real deployed Lambda Function URL when VITE_FUNCTION_URL is
+ * set (see .env.example); falls back to an in-browser mock otherwise.
  */
 export function sendChatMessage({
   message,
   sessionId,
 }: SendChatMessageRequest): ReadableStream<string> {
+  if (FUNCTION_URL) {
+    return createLiveChatStream(message, sessionId, { functionUrl: FUNCTION_URL })
+  }
   return createMockChatStream(message, sessionId)
 }

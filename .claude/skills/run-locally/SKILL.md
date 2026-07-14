@@ -11,24 +11,47 @@ apostrophes/quotes into JSON payloads.
 
 ## Current state: what's runnable locally
 
-Only individual pieces can be run locally right now -- there is no
-end-to-end local flow yet (frontend/backend integration is a later story).
-The three independently runnable pieces:
+Full end-to-end local dev is possible as of US-10: the frontend dev server
+can talk to the real deployed Lambda proxy. Four independently runnable
+pieces:
 
-1. **Frontend** -- chat UI against a mock streaming endpoint (no AWS calls).
+1. **Frontend** -- chat UI, against either the real deployed backend or a
+   local mock streaming endpoint (see below for which one is active).
 2. **Agent CLI** -- the Strands agent directly, via Python (real AWS calls:
    Bedrock model invoke, Knowledge Base retrieve, Guardrail).
 3. **AgentCore container** -- the same agent, wrapped in the exact container
    that gets deployed to AgentCore Runtime, run via Docker (real AWS calls).
+4. **Playwright E2E** -- loads the real frontend dev server in a real
+   browser and sends an actual message; exercises whatever backend the dev
+   server is configured for.
 
 ## 1. Frontend
 
 ```
 make frontend-install   # first time only, or after package.json changes
-make frontend-dev       # dev server with hot reload, chat UI against a mock stream
-make frontend-test      # Vitest, run once (not watch mode)
+make frontend-dev       # dev server with hot reload
+make frontend-test      # Vitest unit tests, run once (not watch mode)
+make frontend-e2e       # Playwright, real browser -- see below
 make frontend-build     # production build (sanity check before deploying)
 ```
+
+**Which backend the dev server uses** is controlled by
+`frontend/.env.local` (gitignored -- copy `.env.example` to create it):
+
+- `VITE_FUNCTION_URL` set to the deployed Function URL (see the
+  deploy-to-aws skill for how to look it up) -> real backend, real grounded
+  answers, real AWS calls.
+- `VITE_FUNCTION_URL` unset -> falls back to an in-browser mock (canned
+  responses, no network calls) -- useful for pure UI iteration with zero
+  AWS dependency.
+
+`frontend-e2e` runs against whichever of these is active. If it fails with
+an empty response but no thrown error, check the browser console via a
+one-off debug script with `page.on('console', ...)`/`page.on('requestfailed', ...)`
+listeners before assuming the app logic is wrong -- a real CORS failure
+here looked exactly like "the stream silently produced nothing" until the
+browser console was actually inspected (see the deploy-to-aws skill's CORS
+gotchas; curl/Node's `fetch` never catch these, only a real browser does).
 
 ## 2. Agent CLI
 
