@@ -247,8 +247,12 @@ class GuardrailStack(Stack):
         # invocation logging is turned on downstream, the log group should be
         # KMS-encrypted and access-restricted before doing so.
 
-        CfnOutput(self, "GuardrailIdOutput", value=guardrail.attr_guardrail_id)
-        CfnOutput(self, "GuardrailArnOutput", value=guardrail.attr_guardrail_arn)
-        CfnOutput(
-            self, "GuardrailVersionOutput", value=guardrail_version.attr_version
-        )
+        # Exposed for cross-stack references within the same CDK app (e.g.
+        # RuntimeStack), mirroring KnowledgeBaseStack.knowledge_base_id.
+        self.guardrail_id = guardrail.attr_guardrail_id
+        self.guardrail_arn = guardrail.attr_guardrail_arn
+        self.guardrail_version = guardrail_version.attr_version
+
+        CfnOutput(self, "GuardrailIdOutput", value=self.guardrail_id)
+        CfnOutput(self, "GuardrailArnOutput", value=self.guardrail_arn)
+        CfnOutput(self, "GuardrailVersionOutput", value=self.guardrail_version)

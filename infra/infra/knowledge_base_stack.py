@@ -185,7 +185,10 @@ class KnowledgeBaseStack(Stack):
             ],
         )
 
+        # Exposed for cross-stack references within the same CDK app (e.g.
+        # RuntimeStack, US-7).
         self.knowledge_base_id = knowledge_base.attr_knowledge_base_id
+        self.knowledge_base_arn = knowledge_base.attr_knowledge_base_arn
 
         CfnOutput(self, "KbSourceBucketName", value=source_bucket.bucket_name)
         CfnOutput(self, "KnowledgeBaseId", value=knowledge_base.attr_knowledge_base_id)
