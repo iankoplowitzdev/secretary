@@ -1,0 +1,10 @@
+{
+  "name": "secretary-lambda-proxy",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Streaming Lambda proxy in front of Bedrock AgentCore Runtime (US-8)",
+  "dependencies": {
+    "@aws-sdk/client-bedrock-agentcore": "^3.1086.0"
+  }
+}

@@ -140,25 +140,32 @@ class KnowledgeBaseStack(Stack):
         )
 
         # --- Budget alarm on Bedrock spend (pulled forward from US-8) ---
+        # Cost Explorer bills "Amazon Bedrock" (model invoke, KB retrieve,
+        # guardrail eval) and "Amazon Bedrock AgentCore" (Runtime compute)
+        # as two SEPARATE Service dimension values -- confirmed via a real
+        # `aws ce get-cost-and-usage` query after this budget had already
+        # been silently missing all AgentCore Runtime cost since US-7. Both
+        # must be listed or genuine spend goes uncounted.
+        budget_thresholds = [50, 80, 100]
         budgets.CfnBudget(
             self,
             "BedrockSpendBudget",
             budget=budgets.CfnBudget.BudgetDataProperty(
-                budget_name="secretary-bedrock-monthly-budget",
+                budget_name="secretary-bedrock-monthly-budget-v2",
                 budget_type="COST",
                 time_unit="MONTHLY",
                 budget_limit=budgets.CfnBudget.SpendProperty(
                     amount=BUDGET_MONTHLY_LIMIT_USD,
                     unit="USD",
                 ),
-                cost_filters={"Service": ["Amazon Bedrock"]},
+                cost_filters={"Service": ["Amazon Bedrock", "Amazon Bedrock AgentCore"]},
             ),
             notifications_with_subscribers=[
                 budgets.CfnBudget.NotificationWithSubscribersProperty(
                     notification=budgets.CfnBudget.NotificationProperty(
                         comparison_operator="GREATER_THAN",
                         notification_type="ACTUAL",
-                        threshold=80,
+                        threshold=threshold,
                         threshold_type="PERCENTAGE",
                     ),
                     subscribers=[
@@ -167,21 +174,8 @@ class KnowledgeBaseStack(Stack):
                             subscription_type="EMAIL",
                         )
                     ],
-                ),
-                budgets.CfnBudget.NotificationWithSubscribersProperty(
-                    notification=budgets.CfnBudget.NotificationProperty(
-                        comparison_operator="GREATER_THAN",
-                        notification_type="ACTUAL",
-                        threshold=100,
-                        threshold_type="PERCENTAGE",
-                    ),
-                    subscribers=[
-                        budgets.CfnBudget.SubscriberProperty(
-                            address=BUDGET_ALERT_EMAIL,
-                            subscription_type="EMAIL",
-                        )
-                    ],
-                ),
+                )
+                for threshold in budget_thresholds
             ],
         )
 

@@ -182,8 +182,9 @@ exposing my AWS account or requiring visitor login.
 
 **Acceptance criteria:**
 - Lambda (Function URL, `RESPONSE_STREAM` invoke mode) accepts `{message, sessionId}`, SigV4-signs a streaming `InvokeAgentRuntime` call, pipes chunks back to the caller.
-- WAF rate-based rule attached to the Function URL; Lambda reserved concurrency capped.
-- Budget alarm on Bedrock spend created.
+- Lambda reserved concurrency capped.
+- Budget alarm on Bedrock spend created — already done in US-6 (`secretary-bedrock-monthly-budget`, $25/mo), extended here to also cover the separate "Amazon Bedrock AgentCore" cost line item now that a public endpoint drives Runtime traffic.
+- ~~WAF rate-based rule attached to the Function URL~~ — **deferred, see Phase 2 backlog.** WAF Web ACLs cannot attach directly to a Lambda Function URL (only ALB, API Gateway REST API, AppSync, Cognito, App Runner, Amplify, Verified Access); the standard fix is fronting the Function URL with a CloudFront distribution (Origin Access Control) and attaching WAF to that instead. Decided against building that now for a personal-scale project — ~$6+/mo fixed WAF cost plus real setup complexity, versus relying on reserved concurrency (free) + the Bedrock spend budget alarm (tightened in this story) as the interim safety net.
 
 **Stop checkpoint:**
 ```
@@ -283,6 +284,13 @@ can be drafted in parallel with US-3/US-4 and only the stop-checkpoint run needs
 ---
 
 ## Phase 2 backlog (not detailed yet)
+
+**WAF + CloudFront for the Function URL:** front the US-8 Lambda Function URL
+with a CloudFront distribution (Origin Access Control, so only CloudFront can
+invoke the function) and attach a WAF rate-based rule to the distribution.
+Deferred out of US-8 — see that story's acceptance criteria for the reasoning
+(cost vs. threat model at personal-project scale). Revisit if real public
+traffic/abuse patterns justify it.
 
 **Job-fit analysis tool:** a new agent tool (`analyze_job_fit`) that accepts a pasted
 job description or URL and returns an assessment of fit against the owner's resume/KB

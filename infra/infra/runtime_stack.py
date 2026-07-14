@@ -122,5 +122,9 @@ class RuntimeStack(Stack):
             # the public frontend calls directly (US-8+).
         )
 
-        CfnOutput(self, "RuntimeArnOutput", value=runtime.agent_runtime_arn)
+        # Exposed for cross-stack references within the same CDK app (e.g.
+        # LambdaProxyStack, US-8).
+        self.agent_runtime_arn = runtime.agent_runtime_arn
+
+        CfnOutput(self, "RuntimeArnOutput", value=self.agent_runtime_arn)
         CfnOutput(self, "RuntimeIdOutput", value=runtime.agent_runtime_id)
