@@ -7,6 +7,7 @@ from infra.infra_stack import InfraStack
 from infra.knowledge_base_stack import KnowledgeBaseStack
 from infra.guardrail_stack import GuardrailStack
 from infra.runtime_stack import RuntimeStack
+from infra.lambda_proxy_stack import LambdaProxyStack
 
 
 app = cdk.App()
@@ -28,6 +29,13 @@ runtime_stack = RuntimeStack(
     guardrail_id=guardrail_stack.guardrail_id,
     guardrail_arn=guardrail_stack.guardrail_arn,
     guardrail_version=guardrail_stack.guardrail_version,
+)
+
+lambda_proxy_stack = LambdaProxyStack(
+    app,
+    "LambdaProxyStack",
+    env=env,
+    agent_runtime_arn=runtime_stack.agent_runtime_arn,
 )
 
 InfraStack(app, "InfraStack",

@@ -5,6 +5,7 @@ AWS_REGION ?= us-east-1
 KB_STACK := KnowledgeBaseStack
 GUARDRAIL_STACK := GuardrailStack
 RUNTIME_STACK := RuntimeStack
+LAMBDA_PROXY_STACK := LambdaProxyStack
 
 export CDK_DEFAULT_ACCOUNT := $(AWS_ACCOUNT)
 export CDK_DEFAULT_REGION := $(AWS_REGION)
@@ -113,6 +114,10 @@ synth-guardrail: ## cdk synth GuardrailStack
 synth-runtime: ## cdk synth RuntimeStack
 	cd infra && . .venv/bin/activate && cdk synth $(RUNTIME_STACK)
 
+.PHONY: synth-proxy
+synth-proxy: ## cdk synth LambdaProxyStack
+	cd infra && . .venv/bin/activate && cdk synth $(LAMBDA_PROXY_STACK)
+
 .PHONY: synth-all
 synth-all: ## cdk synth every stack
 	cd infra && . .venv/bin/activate && cdk synth
@@ -129,8 +134,12 @@ deploy-guardrail: ## Deploy GuardrailStack (Bedrock Guardrail)
 deploy-runtime: ## Deploy RuntimeStack (builds+pushes the Docker image, creates the AgentCore Runtime)
 	cd infra && . .venv/bin/activate && cdk deploy $(RUNTIME_STACK) --require-approval never
 
+.PHONY: deploy-proxy
+deploy-proxy: ## Deploy LambdaProxyStack (streaming Function URL in front of AgentCore Runtime)
+	cd infra && . .venv/bin/activate && cdk deploy $(LAMBDA_PROXY_STACK) --require-approval never
+
 .PHONY: deploy-all
-deploy-all: deploy-kb deploy-guardrail deploy-runtime ## Deploy all three stacks in dependency order
+deploy-all: deploy-kb deploy-guardrail deploy-runtime deploy-proxy ## Deploy all four stacks in dependency order
 
 .PHONY: reingest
 reingest: ## Sync docs/kb-source/ to S3 and run a Bedrock KB ingestion job
@@ -148,13 +157,23 @@ invoke-runtime: ## Invoke the DEPLOYED AgentCore Runtime for real. Usage: make i
 		/tmp/agentcore-invoke-output.txt; \
 	cat /tmp/agentcore-invoke-output.txt
 
+.PHONY: invoke-proxy
+invoke-proxy: ## POST a message to the DEPLOYED Lambda Function URL. Usage: make invoke-proxy MESSAGE="..."
+	@URL=$$(aws cloudformation describe-stacks --stack-name $(LAMBDA_PROXY_STACK) --region $(AWS_REGION) --query "Stacks[0].Outputs[?OutputKey=='FunctionUrlOutput'].OutputValue" --output text); \
+	curl -N -X POST "$$URL" -H "Content-Type: application/json" -d "$$($(JSON_MESSAGE))"
+
 ## --- Teardown ---
 ## No `destroy-all` on purpose -- destructive actions stay one stack at a
 ## time, not a single blanket command. Destroy in reverse dependency order:
-## RuntimeStack, then GuardrailStack, then KnowledgeBaseStack.
+## LambdaProxyStack, then RuntimeStack, then GuardrailStack, then
+## KnowledgeBaseStack.
+
+.PHONY: destroy-proxy
+destroy-proxy: ## Destroy LambdaProxyStack only
+	cd infra && . .venv/bin/activate && cdk destroy $(LAMBDA_PROXY_STACK)
 
 .PHONY: destroy-runtime
-destroy-runtime: ## Destroy RuntimeStack only
+destroy-runtime: ## Destroy RuntimeStack only (destroy LambdaProxyStack first -- it depends on this)
 	cd infra && . .venv/bin/activate && cdk destroy $(RUNTIME_STACK)
 
 .PHONY: destroy-guardrail
