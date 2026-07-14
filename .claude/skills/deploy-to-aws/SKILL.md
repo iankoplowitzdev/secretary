@@ -27,14 +27,15 @@ to target somewhere else).
 
 | Stack | `make` target | Contains |
 |---|---|---|
-| `KnowledgeBaseStack` | `make deploy-kb` | S3 source bucket, S3 Vectors bucket+index, Bedrock Knowledge Base, data source |
-| `GuardrailStack` | `make deploy-guardrail` | Bedrock Guardrail (jailbreak/topic/PII policies), pinned version, $25/mo Bedrock spend budget alarm |
+| `KnowledgeBaseStack` | `make deploy-kb` | S3 source bucket, S3 Vectors bucket+index, Bedrock Knowledge Base, data source, $25/mo Bedrock spend budget alarm |
+| `GuardrailStack` | `make deploy-guardrail` | Bedrock Guardrail (jailbreak/topic/PII policies), pinned version |
 | `RuntimeStack` | `make deploy-runtime` | Docker image build+push, AgentCore Runtime, scoped execution role |
+| `LambdaProxyStack` | `make deploy-proxy` | Streaming Lambda (Node.js) + public Function URL in front of the Runtime |
 
-`RuntimeStack` depends on both others via direct CDK cross-stack references
-(not CloudFormation exports) -- deploy `KnowledgeBaseStack` and
-`GuardrailStack` first, or just run `make deploy-all` which does all three
-in order.
+`RuntimeStack` depends on `KnowledgeBaseStack` and `GuardrailStack`;
+`LambdaProxyStack` depends on `RuntimeStack` -- all via direct CDK
+cross-stack references (not CloudFormation exports). Deploy in the table's
+order, or just run `make deploy-all` which does all four.
 
 `infra/infra/infra_stack.py` (`InfraStack`) is **unused dead scaffolding**
 left over from initial project setup -- it's still registered in `app.py`
@@ -45,8 +46,8 @@ cleaning up later.
 ## Standard flow
 
 ```
-make synth-kb          # or synth-guardrail / synth-runtime / synth-all -- cheap, no AWS calls, catches schema errors before deploying
-make deploy-kb          # or deploy-guardrail / deploy-runtime / deploy-all
+make synth-kb          # or synth-guardrail / synth-runtime / synth-proxy / synth-all -- cheap, no AWS calls, catches schema errors before deploying
+make deploy-kb          # or deploy-guardrail / deploy-runtime / deploy-proxy / deploy-all
 ```
 
 After a `KnowledgeBaseStack` deploy where source docs changed:
@@ -69,7 +70,19 @@ make invoke-runtime MESSAGE="What are Ian's core skills?"
 
 Look for `kb_retrieve` in the response with `success_count=1, error_count=0`
 and real resume content in the answer -- not an apology about failing to
-retrieve information.
+retrieve information. After `deploy-proxy`, also verify the public path
+end-to-end (a working `invoke-runtime` does NOT prove the Lambda's IAM
+permissions or CORS config are correct -- both have broken independently
+before):
+
+```
+make invoke-proxy MESSAGE="What are Ian's core skills?"
+```
+
+CORS specifically only breaks in a real browser -- curl and Node's `fetch`
+don't enforce it, so `invoke-proxy` passing is not sufficient proof the
+frontend can actually talk to the proxy. Run
+`cd frontend && npm run test:e2e` (Playwright, real browser) for that.
 
 ## Known gotchas (hit for real during development -- don't rediscover these)
 
@@ -144,7 +157,60 @@ retrieve information.
 - **`DockerImageAsset` build context path**: must be an absolute path (or
   relative to the CDK app's own cwd, which is `infra/`, not the repo root)
   -- `RuntimeStack` computes this via `os.path.abspath` from `__file__`
-  rather than a bare relative string.
+  rather than a bare relative string. `NodejsFunction`'s `entry`/
+  `deps_lock_file_path` need the same treatment (see `LambdaProxyStack`).
+
+- **IAM resource ARN must match the actual sub-resource being called, not
+  just the parent**: granting `bedrock-agentcore:InvokeAgentRuntime` on the
+  bare Runtime ARN is not enough -- the real authorization check is against
+  the Runtime's *endpoint* ARN (`.../runtime-endpoint/DEFAULT`), a
+  sub-resource. Grant both the bare ARN and `f"{arn}/*"`. Same class of bug
+  as the `bedrock:Retrieve` mismatch above; both were only caught by a real
+  invocation, not by `cdk deploy` succeeding.
+
+- **This account's Lambda concurrency limit is only 10** (not AWS's
+  standard 1000 default). AWS requires >=10 unreserved executions
+  account-wide at all times, so with a ceiling of exactly 10 there is no
+  room to set `reserved_concurrent_executions` on any function without
+  violating that floor -- deploy fails with *"decreases account's
+  UnreservedConcurrentExecution below its minimum value of [10]."* The
+  account's inherent ceiling already caps worst-case concurrency in
+  practice; don't fight it with an explicit reservation unless the account
+  quota gets raised first.
+
+- **WAF cannot attach directly to a Lambda Function URL.** `AWS::WAFv2::WebACLAssociation`
+  only supports ALB, API Gateway REST API, AppSync, Cognito, App Runner,
+  Amplify, and Verified Access. The standard fix is fronting the Function
+  URL with a CloudFront distribution (Origin Access Control) and attaching
+  WAF to that instead -- real fixed cost (~$5/mo per Web ACL + $1/mo per
+  rule, regardless of traffic), not just pay-per-request. This project
+  deferred it (see `docs/proj_spec.md` Phase 2 backlog); reserved
+  concurrency + the budget alarm are the interim safety net.
+
+- **A Lambda Function URL's own CORS config and hand-written CORS headers
+  in the handler will conflict, not stack.** Setting
+  `Access-Control-Allow-Origin` both in `FunctionUrlCorsOptions` (CDK) and
+  manually in the Lambda's response headers produces a response with the
+  header appearing *twice* with different values (e.g. `'*,
+  http://localhost:5173'`), which browsers reject outright -- confirmed via
+  a real Playwright run against a live browser (the request silently failed
+  and the UI showed no response text; curl and Node's `fetch` never caught
+  it because neither enforces CORS). Set CORS in exactly one place --
+  `FunctionUrlCorsOptions` -- and don't add it again in code.
+
+- **A JSON POST body needs `allowed_headers=["Content-Type"]` in
+  `FunctionUrlCorsOptions`.** `application/json` isn't a CORS "simple"
+  content-type, so browsers send a preflight `OPTIONS` request first; without
+  explicitly allowing the `Content-Type` header, the preflight (and
+  therefore the real request) gets blocked. Same browser-only blind spot as
+  above -- curl/Node's `fetch` don't do CORS preflight at all.
+
+- **Cost Explorer bills "Amazon Bedrock" and "Amazon Bedrock AgentCore" as
+  two separate `Service` dimension values.** A budget's `cost_filters`
+  scoped to just `["Amazon Bedrock"]` silently misses all AgentCore Runtime
+  compute cost -- confirmed via a real `aws ce get-cost-and-usage` query
+  showing both as distinct non-zero line items. List both explicitly in any
+  budget meant to track this project's full Bedrock-family spend.
 
 ## Teardown
 
@@ -152,11 +218,12 @@ Destroy one stack at a time, in *reverse* dependency order (there's no
 `destroy-all` on purpose):
 
 ```
-make destroy-runtime      # first -- depends on the other two
+make destroy-proxy        # first -- depends on RuntimeStack
+make destroy-runtime      # depends on the other two
 make destroy-guardrail
 make destroy-kb
 ```
 
 Confirm with the user before running any `destroy-*` target -- these delete
 real resources (the Knowledge Base's ingested content, the Guardrail, the
-running agent endpoint).
+running agent endpoint, the public Function URL).

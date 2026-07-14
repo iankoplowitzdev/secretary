@@ -108,15 +108,20 @@ export const handler = awslambda.streamifyResponse(
 
     const runtimeSessionId = resolveSessionId(sessionId);
 
+    // CORS headers are NOT set here -- the Function URL's own CORS config
+    // (LambdaProxyStack's FunctionUrlCorsOptions) already adds them to every
+    // response automatically. Setting them here too produced a real bug:
+    // duplicate Access-Control-Allow-Origin values, which browsers reject
+    // outright ("The 'Access-Control-Allow-Origin' header contains multiple
+    // values ... but only one is allowed") -- confirmed via a real
+    // Playwright run against a live browser (curl/Node's fetch don't
+    // enforce CORS, so this only broke in an actual browser).
     const httpResponseStream = awslambda.HttpResponseStream.from(
       responseStream,
       {
         statusCode: 200,
         headers: {
           "Content-Type": "text/event-stream",
-          // Permissive for now -- no fixed frontend domain until Amplify
-          // Hosting (US-11) exists. Tighten to the real origin then.
-          "Access-Control-Allow-Origin": "*",
         },
       },
     );

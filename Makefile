@@ -36,6 +36,10 @@ frontend-dev: ## Run the frontend dev server (chat UI against a mock stream)
 frontend-test: ## Run frontend tests (Vitest)
 	cd frontend && npm test -- --run
 
+.PHONY: frontend-e2e
+frontend-e2e: ## Run the Playwright E2E smoke test. Uses whatever backend frontend/.env.local points at (real deployed proxy if VITE_FUNCTION_URL is set, else the mock)
+	cd frontend && npm run test:e2e
+
 .PHONY: frontend-build
 frontend-build: ## Build the frontend for production
 	cd frontend && npm run build

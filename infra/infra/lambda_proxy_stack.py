@@ -94,6 +94,15 @@ class LambdaProxyStack(Stack):
                 # tighten to the real origin once one exists.
                 allowed_origins=["*"],
                 allowed_methods=[lambda_.HttpMethod.POST],
+                # A JSON POST body triggers a CORS preflight (application/json
+                # isn't a "simple" content-type) -- without explicitly
+                # allowing the Content-Type header, browsers block the real
+                # request after the preflight is rejected. Curl and Node's
+                # fetch don't enforce CORS at all, so this only breaks in an
+                # actual browser -- confirmed via a real Playwright run
+                # against a live dev server where the request silently
+                # failed and the UI showed no response text.
+                allowed_headers=["Content-Type"],
             ),
         )
 
