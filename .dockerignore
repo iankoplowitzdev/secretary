@@ -1,0 +1,9 @@
+.git
+.venv
+frontend
+infra
+docs
+.claude
+*.md
+__pycache__
+*.pyc
