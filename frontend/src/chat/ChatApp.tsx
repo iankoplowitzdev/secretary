@@ -11,8 +11,16 @@ function nextId(prefix: string): string {
   return `${prefix}-${messageCounter}`
 }
 
+const GREETING_TEXT =
+  "Hi, I'm Ian's personal AI secretary! Feel free to ask me questions about " +
+  "him and his work history, and I'll do my best to answer them for you."
+
+function initialMessages(): ChatMessage[] {
+  return [{ id: nextId('assistant'), role: 'assistant', text: GREETING_TEXT }]
+}
+
 export function ChatApp() {
-  const [messages, setMessages] = useState<ChatMessage[]>([])
+  const [messages, setMessages] = useState<ChatMessage[]>(initialMessages)
   const [isStreaming, setIsStreaming] = useState(false)
   const sessionId = useRef(getSessionId()).current
 
