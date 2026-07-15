@@ -271,12 +271,51 @@ curl -N -X POST "$AMPLIFY_URL/api/chat" -d '{"message":"Tell me about <owner>'\'
 
 ---
 
+### US-13: Chat UI quality-of-life fixes
+**Story:** As a site visitor, I want the chat to auto-scroll sensibly, show a clear
+"thinking" state instead of a blank bubble, and be greeted with an intro message, so
+the experience feels intentional and responsive rather than broken.
+
+**Depends on:** US-10 (needs the integrated, real-backend chat experience to fix against)
+**Parallelizable with:** none — recommended to land before US-11 (Amplify deploy) so
+the publicly deployed frontend doesn't ship with these known issues.
+
+**Acceptance criteria:**
+- **Auto-scroll pinning:** the message list stays scrolled to the newest message as
+  messages arrive/stream, *unless* the user has manually scrolled up — in which case
+  auto-scroll is suspended until they scroll back to the bottom themselves (or send
+  a new message). Covered by an automated test that simulates scrolling up and then
+  new content arriving, asserting the view does NOT jump back to the bottom, plus a
+  complementary case asserting it DOES follow when already at the bottom.
+- **"Thinking" placeholder:** a newly created assistant message (before its first
+  streamed chunk arrives) renders a "Thinking…" (or equivalent) indicator instead of
+  an empty bubble with just a blinking cursor. The placeholder is replaced by real
+  content as soon as the first chunk arrives. Update the existing `ChatApp.test.tsx`
+  assertion that currently expects an empty bubble in this state
+  (`frontend/src/chat/ChatApp.test.tsx:69`) to match the new placeholder behavior.
+- **Intro greeting:** on mount, before any user interaction, the message list already
+  contains one assistant message with a greeting along the lines of: "Hi, I'm Ian's
+  personal AI secretary! Feel free to ask me questions about him and his work
+  history, and I'll do my best to answer them for you." (exact copy may be tuned,
+  but it must be present, non-streaming, and generated client-side — not sent
+  to/from the backend or counted as a real exchange).
+- All three behaviors are covered by new Vitest component tests (extending
+  `ChatApp.test.tsx`/`MessageList.tsx` coverage) so future changes can't regress
+  them without a test failure.
+
+**Stop checkpoint:**
+```
+cd frontend && npm test -- --run && echo FRONTEND_QOL_OK
+```
+
+---
+
 ## Parallelization summary
 
 | Can run together | Stories |
 |---|---|
 | Group A | US-2 (docs staged), US-3 (KB infra), US-5\*, US-6, US-9 (frontend UI against mock) |
-| Sequential spine | US-1 → US-3/US-2 → US-4 → US-5/US-6 → US-7 → US-8 → US-10 → US-11 → US-12 |
+| Sequential spine | US-1 → US-3/US-2 → US-4 → US-5/US-6 → US-7 → US-8 → US-10 → US-13 → US-11 → US-12 |
 
 \*US-5 technically needs US-4 (live KB) to fully verify, but its code (tool + prompt)
 can be drafted in parallel with US-3/US-4 and only the stop-checkpoint run needs to wait.
@@ -294,6 +333,6 @@ traffic/abuse patterns justify it.
 
 **Job-fit analysis tool:** a new agent tool (`analyze_job_fit`) that accepts a pasted
 job description or URL and returns an assessment of fit against the owner's resume/KB
-content. To be broken into its own user stories once Phase 1 (US-1 through US-12) is
+content. To be broken into its own user stories once Phase 1 (US-1 through US-13) is
 live and stable. Expected to slot in cleanly given tools are already isolated in
 `my_agent/tools/` and KB retrieval is already a reusable helper.

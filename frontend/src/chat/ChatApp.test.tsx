@@ -33,6 +33,15 @@ describe('ChatApp', () => {
     vi.restoreAllMocks()
   })
 
+  it('shows an introductory greeting message on mount, before any interaction', () => {
+    render(<ChatApp />)
+
+    const greeting = screen.getByText(/Ian's personal AI secretary/i)
+    const listItem = greeting.closest('li')!
+    expect(listItem).toHaveClass('message-assistant')
+    expect(listItem).toHaveAttribute('data-streaming', 'false')
+  })
+
   it('sends a message and shows it in the message list', async () => {
     const user = userEvent.setup()
     const controllable = createControllableStream()
@@ -59,20 +68,26 @@ describe('ChatApp', () => {
     await user.type(screen.getByLabelText(/message/i), 'Tell me something')
     await user.click(screen.getByRole('button', { name: /send/i }))
 
-    const assistantText = () =>
-      screen
-        .getAllByText('Assistant', { selector: '.message-author' })[0]
-        .closest('li')!
-        .querySelector('.message-text')!.textContent ?? ''
+    // There are now two assistant bubbles (the intro greeting, plus this
+    // reply) -- always target the latest one, matching the e2e test pattern.
+    const assistantText = () => {
+      const authors = screen.getAllByText('Assistant', { selector: '.message-author' })
+      return (
+        authors[authors.length - 1]
+          .closest('li')!
+          .querySelector('.message-text')!.textContent ?? ''
+      )
+    }
 
-    // Nothing streamed yet (only the blinking cursor is present).
-    expect(assistantText().replace('▍', '').trim()).toBe('')
+    // Nothing streamed yet -- shows a "thinking" placeholder, not an empty bubble.
+    expect(assistantText()).toMatch(/thinking/i)
 
     controllable.push('Hello')
     await waitFor(() => {
       expect(assistantText()).toContain('Hello')
     })
     // Assert this is a genuine intermediate state, not the final text yet.
+    expect(assistantText()).not.toMatch(/thinking/i)
     expect(assistantText()).not.toContain('Hello world, done')
 
     controllable.push(' world')
