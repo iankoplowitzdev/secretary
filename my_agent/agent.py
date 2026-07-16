@@ -9,9 +9,14 @@ Run locally:
 import argparse
 import os
 import sys
+import uuid
 from functools import lru_cache
 
 import boto3
+from bedrock_agentcore.memory.integrations.strands.config import AgentCoreMemoryConfig
+from bedrock_agentcore.memory.integrations.strands.session_manager import (
+    AgentCoreMemorySessionManager,
+)
 from strands import Agent
 from strands.models import BedrockModel
 
@@ -19,6 +24,7 @@ from my_agent.tools.kb_retrieve import kb_retrieve
 
 DEFAULT_REGION = "us-east-1"
 GUARDRAIL_STACK_NAME = "GuardrailStack"
+MEMORY_STACK_NAME = "MemoryStack"
 
 
 @lru_cache(maxsize=1)
@@ -56,6 +62,39 @@ def _resolve_guardrail() -> tuple[str, str]:
             f"GUARDRAIL_ID and GUARDRAIL_VERSION environment variables to override."
         )
     return guardrail_id, guardrail_version
+
+
+@lru_cache(maxsize=1)
+def _resolve_memory_id() -> str:
+    """Resolve the live AgentCore Memory ID.
+
+    Same pattern as _resolve_guardrail/kb_retrieve._resolve_knowledge_base_id.
+
+    Preference order:
+    1. ``MEMORY_ID`` environment variable (explicit override).
+    2. The ``MemoryIdOutput`` output of the ``MemoryStack`` CloudFormation
+       stack (or ``MEMORY_STACK_NAME`` if set).
+    """
+    env_id = os.environ.get("MEMORY_ID")
+    if env_id:
+        return env_id
+
+    region = os.environ.get("KB_REGION") or os.environ.get("AWS_REGION") or DEFAULT_REGION
+    stack_name = os.environ.get("MEMORY_STACK_NAME", MEMORY_STACK_NAME)
+
+    cfn = boto3.client("cloudformation", region_name=region)
+    response = cfn.describe_stacks(StackName=stack_name)
+    outputs = response["Stacks"][0].get("Outputs", [])
+    values = {o["OutputKey"]: o["OutputValue"] for o in outputs}
+
+    memory_id = values.get("MemoryIdOutput")
+    if not memory_id:
+        raise RuntimeError(
+            f"Could not find a 'MemoryIdOutput' output on CloudFormation stack "
+            f"'{stack_name}' in region '{region}'. Set the MEMORY_ID "
+            f"environment variable to override."
+        )
+    return memory_id
 
 # Amazon Nova Lite cross-region inference profile. AWS-native model — no
 # Anthropic use-case attestation required (unlike Claude Haiku 4.5, which
@@ -125,8 +164,20 @@ learn about his work history, skills, interests, and projects.
 """
 
 
-def build_agent() -> Agent:
-    """Construct the secretary Agent: Nova Lite + KB retrieval tool + guardrail."""
+def build_agent(session_id: str, actor_id: str | None = None) -> Agent:
+    """Construct the secretary Agent: Nova Lite + KB retrieval tool + guardrail + memory.
+
+    Args:
+        session_id: The AgentCore session id for this conversation. Turns are
+            recalled within a session but not across sessions.
+        actor_id: Defaults to session_id. Kept as a separate identity from
+            session_id in AgentCore Memory's data model, but this bot has no
+            real per-visitor identity (public, anonymous) — using the same
+            value for both is a deliberate choice, not an oversight: it means
+            no memory persists across a visitor starting a new session,
+            consistent with this project's existing PII-conscious guardrail
+            design (see guardrail_stack.py).
+    """
     guardrail_id, guardrail_version = _resolve_guardrail()
     model = BedrockModel(
         model_id=MODEL_ID,
@@ -140,10 +191,21 @@ def build_agent() -> Agent:
         guardrail_redact_output=True,
         guardrail_redact_output_message=GUARDRAIL_BLOCK_PHRASE,
     )
+    memory_config = AgentCoreMemoryConfig(
+        memory_id=_resolve_memory_id(),
+        session_id=session_id,
+        actor_id=actor_id or session_id,
+        # retrieval_config intentionally left at its default (None): that's
+        # what keeps this short-term-memory-only, with no long-term-memory
+        # retrieval configured (US-14 scope).
+    )
+    region = os.environ.get("KB_REGION") or os.environ.get("AWS_REGION") or DEFAULT_REGION
+    session_manager = AgentCoreMemorySessionManager(memory_config, region_name=region)
     return Agent(
         model=model,
         tools=[kb_retrieve],
         system_prompt=SYSTEM_PROMPT,
+        session_manager=session_manager,
         # Suppress the default callback handler, which streams tokens to
         # stdout as they arrive. We want clean stdout with only the final
         # response text (see main()), so streaming/logging noise must stay off.
@@ -151,9 +213,9 @@ def build_agent() -> Agent:
     )
 
 
-def run(message: str) -> str:
+def run(message: str, session_id: str) -> str:
     """Invoke the agent with a single message and return the final response text."""
-    agent = build_agent()
+    agent = build_agent(session_id=session_id)
     result = agent(message)
     return str(result)
 
@@ -167,9 +229,19 @@ def main() -> None:
         required=True,
         help="The user message to send to the agent.",
     )
+    parser.add_argument(
+        "--session-id",
+        default=None,
+        help=(
+            "Session id to recall prior turns under (US-14 short-term memory). "
+            "Pass the same value across multiple invocations to test multi-turn "
+            "recall locally. Defaults to a fresh random UUID (no recall)."
+        ),
+    )
     args = parser.parse_args()
 
-    response_text = run(args.message)
+    session_id = args.session_id or str(uuid.uuid4())
+    response_text = run(args.message, session_id=session_id)
     # Print only the clean final response text to stdout so callers can
     # reliably grep it, with no other logging noise mixed in.
     sys.stdout.write(response_text.strip() + "\n")

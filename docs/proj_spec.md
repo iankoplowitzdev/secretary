@@ -310,11 +310,79 @@ cd frontend && npm test -- --run && echo FRONTEND_QOL_OK
 
 ---
 
+### US-14: Short-term conversation memory via AgentCore Memory
+**Story:** As a site visitor, I want the agent to remember earlier turns within the
+same conversation, so a follow-up like "what did he do there?" resolves against what
+was already said instead of being answered as if it's the very first message.
+
+**Depends on:** US-7 (needs a live Runtime + its execution role to attach memory to)
+**Parallelizable with:** US-8, US-9, US-10, US-11, US-12, US-13 — this story only
+touches `my_agent/`, `runtime_app.py`, and a new infra stack; no frontend or Lambda
+proxy changes are required for the core behavior.
+
+**Context:** today, `runtime_app.py`'s `invoke()` calls `build_agent()` fresh on
+every request, so each `Agent` starts with empty history regardless of the
+`runtimeSessionId` the proxy forwards — there is currently no cross-turn memory at
+all. This story scopes fixing *that* specifically, using Bedrock AgentCore's
+short-term memory (STM) only. Long-term/semantic memory (the built-in
+summary/user-preference/semantic-fact strategies, retrievable across separate
+sessions) is deliberately out of scope here — it's a materially bigger feature
+(namespaces, retrieval tuning, an `actor_id` identity model that doesn't map
+cleanly onto anonymous public visitors) and belongs in its own follow-on story once
+STM is proven.
+
+**Acceptance criteria:**
+- New CDK stack (e.g. `infra/infra/memory_stack.py`, matching the one-stack-per-file
+  convention) provisions a Bedrock AgentCore Memory resource, short-term only (no
+  strategies configured). Uses the `Memory` L2 construct from the
+  `aws-cdk.aws-bedrock-agentcore-alpha` package if available at the CDK version this
+  repo pins — confirm it's actually published for that version before relying on it;
+  fall back to an L1 `CfnMemory`/custom resource if not.
+- `RuntimeStack`'s execution role is granted the memory-specific IAM actions it
+  needs (at minimum `bedrock-agentcore:CreateEvent`, `bedrock-agentcore:GetEvent`,
+  `bedrock-agentcore:ListEvents`), scoped to the new Memory resource's ARN only —
+  **do not assume the action names above are exactly right without checking current
+  AWS docs first**; this project has already been burned once by a subtly-wrong
+  AgentCore IAM action name that deployed cleanly and only failed on a real
+  invocation (see `runtime_stack.py`'s `bedrock:Retrieve` comment) — treat this the
+  same way.
+- `my_agent/agent.py`/`runtime_app.py` wired to use
+  `bedrock_agentcore.memory.integrations.strands.session_manager.AgentCoreMemorySessionManager`,
+  passed into `Agent(session_manager=...)`. `actor_id` and `session_id` are both
+  derived from the AgentCore-assigned session id for this request (verify the exact
+  mechanism the `bedrock_agentcore` Python SDK exposes for reading the session id
+  inside `@app.entrypoint` — don't assume it's only in the request payload). Using
+  the same value for both means no memory persists across a visitor closing the tab
+  and starting a new session — a deliberate choice consistent with this project's
+  existing PII-conscious guardrail design, not an oversight.
+- The Memory resource ID is resolved the same way every other Bedrock resource ID
+  in this repo is (env var override, else a CloudFormation stack output) — never
+  hardcoded, per this repo's established convention.
+- `agent.py`'s CLI gains a `--session-id` flag (default: a fresh UUID) so two
+  separate `agent-run` invocations can be made to share a session for local
+  testing, without needing the full proxy/runtime path to verify basic recall.
+- A real, live `InvokeAgentRuntime` call (not just a synth/deploy) with two
+  sequential messages under the same session id proves recall works end-to-end —
+  per this repo's rule that a green deploy doesn't prove runtime behavior actually
+  works.
+
+**Stop checkpoint:**
+```
+SID="memory-smoke-$(uuidgen)"
+python -m my_agent.agent --session-id "$SID" --message "What was <owner>'s most recent job title?" \
+  | grep -qi "<expected-substring>"
+python -m my_agent.agent --session-id "$SID" --message "What did <owner> do there?" \
+  | grep -qi "<expected-substring-that-only-makes-sense-with-context-from-turn-1>" && echo MEMORY_OK
+```
+
+---
+
 ## Parallelization summary
 
 | Can run together | Stories |
 |---|---|
 | Group A | US-2 (docs staged), US-3 (KB infra), US-5\*, US-6, US-9 (frontend UI against mock) |
+| Group B | US-14 (memory) — independent of the frontend/deploy track (US-8 through US-13) once US-7 is live |
 | Sequential spine | US-1 → US-3/US-2 → US-4 → US-5/US-6 → US-7 → US-8 → US-10 → US-13 → US-11 → US-12 |
 
 \*US-5 technically needs US-4 (live KB) to fully verify, but its code (tool + prompt)

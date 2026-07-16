@@ -4,6 +4,7 @@ AWS_ACCOUNT ?= 107674771027
 AWS_REGION ?= us-east-1
 KB_STACK := KnowledgeBaseStack
 GUARDRAIL_STACK := GuardrailStack
+MEMORY_STACK := MemoryStack
 RUNTIME_STACK := RuntimeStack
 LAMBDA_PROXY_STACK := LambdaProxyStack
 
@@ -53,8 +54,8 @@ agent-venv: ## (Re)build the root .venv used to run my_agent locally
 	.venv/bin/pip install -r my_agent/requirements.txt
 
 .PHONY: agent-run
-agent-run: ## Run the agent CLI locally. Usage: make agent-run MESSAGE="..."
-	.venv/bin/python -m my_agent.agent --message "$(MESSAGE)"
+agent-run: ## Run the agent CLI locally. Usage: make agent-run MESSAGE="..." [SESSION_ID="..."]
+	.venv/bin/python -m my_agent.agent --message "$(MESSAGE)" $(if $(SESSION_ID),--session-id "$(SESSION_ID)")
 
 ## --- Agent (Docker / AgentCore container, run locally) ---
 
@@ -68,6 +69,7 @@ docker-run: ## Run the container locally using YOUR OWN AWS creds (not the deplo
 	KB_ID=$$(aws cloudformation describe-stacks --stack-name $(KB_STACK) --region $(AWS_REGION) --query "Stacks[0].Outputs[?OutputKey=='KnowledgeBaseId'].OutputValue" --output text); \
 	GUARDRAIL_ID=$$(aws cloudformation describe-stacks --stack-name $(GUARDRAIL_STACK) --region $(AWS_REGION) --query "Stacks[0].Outputs[?OutputKey=='GuardrailIdOutput'].OutputValue" --output text); \
 	GUARDRAIL_VERSION=$$(aws cloudformation describe-stacks --stack-name $(GUARDRAIL_STACK) --region $(AWS_REGION) --query "Stacks[0].Outputs[?OutputKey=='GuardrailVersionOutput'].OutputValue" --output text); \
+	MEMORY_ID=$$(aws cloudformation describe-stacks --stack-name $(MEMORY_STACK) --region $(AWS_REGION) --query "Stacks[0].Outputs[?OutputKey=='MemoryIdOutput'].OutputValue" --output text); \
 	docker rm -f $(DOCKER_CONTAINER) >/dev/null 2>&1 || true; \
 	docker run -d --platform linux/arm64 -p $(DOCKER_PORT):8080 \
 		-e AWS_ACCESS_KEY_ID="$$AWS_ACCESS_KEY_ID" \
@@ -77,6 +79,7 @@ docker-run: ## Run the container locally using YOUR OWN AWS creds (not the deplo
 		-e KNOWLEDGE_BASE_ID=$$KB_ID \
 		-e GUARDRAIL_ID=$$GUARDRAIL_ID \
 		-e GUARDRAIL_VERSION=$$GUARDRAIL_VERSION \
+		-e MEMORY_ID=$$MEMORY_ID \
 		-e DOCKER_CONTAINER=1 \
 		--name $(DOCKER_CONTAINER) \
 		$(DOCKER_IMAGE) >/dev/null; \
@@ -114,6 +117,10 @@ synth-kb: ## cdk synth KnowledgeBaseStack
 synth-guardrail: ## cdk synth GuardrailStack
 	cd infra && . .venv/bin/activate && cdk synth $(GUARDRAIL_STACK)
 
+.PHONY: synth-memory
+synth-memory: ## cdk synth MemoryStack
+	cd infra && . .venv/bin/activate && cdk synth $(MEMORY_STACK)
+
 .PHONY: synth-runtime
 synth-runtime: ## cdk synth RuntimeStack
 	cd infra && . .venv/bin/activate && cdk synth $(RUNTIME_STACK)
@@ -134,6 +141,10 @@ deploy-kb: ## Deploy KnowledgeBaseStack (S3 source bucket, S3 Vectors, Bedrock K
 deploy-guardrail: ## Deploy GuardrailStack (Bedrock Guardrail)
 	cd infra && . .venv/bin/activate && cdk deploy $(GUARDRAIL_STACK) --require-approval never
 
+.PHONY: deploy-memory
+deploy-memory: ## Deploy MemoryStack (Bedrock AgentCore short-term memory)
+	cd infra && . .venv/bin/activate && cdk deploy $(MEMORY_STACK) --require-approval never
+
 .PHONY: deploy-runtime
 deploy-runtime: ## Deploy RuntimeStack (builds+pushes the Docker image, creates the AgentCore Runtime)
 	cd infra && . .venv/bin/activate && cdk deploy $(RUNTIME_STACK) --require-approval never
@@ -143,18 +154,20 @@ deploy-proxy: ## Deploy LambdaProxyStack (streaming Function URL in front of Age
 	cd infra && . .venv/bin/activate && cdk deploy $(LAMBDA_PROXY_STACK) --require-approval never
 
 .PHONY: deploy-all
-deploy-all: deploy-kb deploy-guardrail deploy-runtime deploy-proxy ## Deploy all four stacks in dependency order
+deploy-all: deploy-kb deploy-guardrail deploy-memory deploy-runtime deploy-proxy ## Deploy all stacks in dependency order
 
 .PHONY: reingest
 reingest: ## Sync docs/kb-source/ to S3 and run a Bedrock KB ingestion job
 	./scripts/reingest_kb.sh
 
 .PHONY: invoke-runtime
-invoke-runtime: ## Invoke the DEPLOYED AgentCore Runtime for real. Usage: make invoke-runtime MESSAGE="..."
+invoke-runtime: ## Invoke the DEPLOYED AgentCore Runtime for real. Usage: make invoke-runtime MESSAGE="..." [SESSION_ID="..."]
 	@ARN=$$(aws cloudformation describe-stacks --stack-name $(RUNTIME_STACK) --region $(AWS_REGION) --query "Stacks[0].Outputs[?OutputKey=='RuntimeArnOutput'].OutputValue" --output text); \
+	SID="$(SESSION_ID)"; \
+	if [ -z "$$SID" ]; then SID="manual-$$(uuidgen | tr -d '-')"; fi; \
 	aws bedrock-agentcore invoke-agent-runtime \
 		--agent-runtime-arn "$$ARN" \
-		--runtime-session-id "manual-$$(uuidgen | tr -d '-')" \
+		--runtime-session-id "$$SID" \
 		--payload "$$($(JSON_MESSAGE))" \
 		--cli-binary-format raw-in-base64-out \
 		--region $(AWS_REGION) \
@@ -169,7 +182,7 @@ invoke-proxy: ## POST a message to the DEPLOYED Lambda Function URL. Usage: make
 ## --- Teardown ---
 ## No `destroy-all` on purpose -- destructive actions stay one stack at a
 ## time, not a single blanket command. Destroy in reverse dependency order:
-## LambdaProxyStack, then RuntimeStack, then GuardrailStack, then
+## LambdaProxyStack, then RuntimeStack, then GuardrailStack/MemoryStack, then
 ## KnowledgeBaseStack.
 
 .PHONY: destroy-proxy
@@ -179,6 +192,10 @@ destroy-proxy: ## Destroy LambdaProxyStack only
 .PHONY: destroy-runtime
 destroy-runtime: ## Destroy RuntimeStack only (destroy LambdaProxyStack first -- it depends on this)
 	cd infra && . .venv/bin/activate && cdk destroy $(RUNTIME_STACK)
+
+.PHONY: destroy-memory
+destroy-memory: ## Destroy MemoryStack only (destroy RuntimeStack first -- it depends on this)
+	cd infra && . .venv/bin/activate && cdk destroy $(MEMORY_STACK)
 
 .PHONY: destroy-guardrail
 destroy-guardrail: ## Destroy GuardrailStack only (destroy RuntimeStack first -- it depends on this)

@@ -35,6 +35,7 @@ class RuntimeStack(Stack):
         guardrail_id: str,
         guardrail_arn: str,
         guardrail_version: str,
+        memory: agentcore.Memory,
         **kwargs,
     ) -> None:
         super().__init__(scope, construct_id, **kwargs)
@@ -94,6 +95,22 @@ class RuntimeStack(Stack):
                 resources=[knowledge_base_arn],
             )
         )
+        # Short-term memory only (US-14): write new turns, read them back
+        # within the same session, and delete/replace individual events. The
+        # delete grant is not optional despite this agent never explicitly
+        # deleting anything — confirmed via a real invocation that
+        # AgentCoreMemorySessionManager internally deletes-and-recreates an
+        # event when correcting/updating a message, and without
+        # DeleteEvent that surfaces mid-stream as an AccessDeniedException,
+        # not at deploy time. Using the construct's own grant methods rather
+        # than hand-written PolicyStatements — this repo has already been
+        # burned once by a subtly-wrong AgentCore IAM action name (see the
+        # bedrock:Retrieve comment above), so let CDK's own grant helper own
+        # the exact action list instead of guessing it again here.
+        memory.grant_write(execution_role)
+        memory.grant_read_short_term_memory(execution_role)
+        memory.grant_delete_short_term_memory(execution_role)
+
         # AgentCore needs to pull the container image on cold start.
         image_asset.repository.grant_pull(execution_role)
 
@@ -114,6 +131,7 @@ class RuntimeStack(Stack):
                 "KNOWLEDGE_BASE_ID": knowledge_base_id,
                 "GUARDRAIL_ID": guardrail_id,
                 "GUARDRAIL_VERSION": guardrail_version,
+                "MEMORY_ID": memory.memory_id,
                 "AWS_REGION": self.region,
             },
             # Defaults: HTTP protocol, IAM authorizer (SigV4), public network
