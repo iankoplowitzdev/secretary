@@ -41,6 +41,16 @@ function longestSuffixPrefixOverlap(text: string, marker: string): number {
  * next starts with "king>"). A trailing partial match of the open tag is
  * withheld rather than shown, so a tag-in-progress never flashes to the
  * user before we know whether it's real.
+ *
+ * Also consumes whitespace immediately following a closed thinking block
+ * (BUG-2): Nova Lite's real responses are formatted
+ * `<thinking>...</thinking>\n\n<answer>`, so stripping just the tag pair
+ * left that whitespace behind — a stray leading space at best, several
+ * blank lines before the answer at worst. A final trimStart() catches the
+ * same issue if whitespace precedes the very first thinking tag (or there's
+ * no thinking tag at all); neither touches whitespace the model puts
+ * *inside* its real answer, since both only ever trim at a boundary right
+ * after something was just removed.
  */
 export function computeVisibleText(raw: string): string {
   let result = ''
@@ -60,8 +70,12 @@ export function computeVisibleText(raw: string): string {
       break
     }
     i = end + THINKING_CLOSE.length
+    while (i < raw.length && /\s/.test(raw[i])) {
+      i += 1
+    }
   }
-  return result
+  // Belt-and-suspenders leading trim -- see the doc comment above for why.
+  return result.trimStart()
 }
 
 /** Extracts the text delta from one parsed AgentCore/Strands SSE event, if present. */

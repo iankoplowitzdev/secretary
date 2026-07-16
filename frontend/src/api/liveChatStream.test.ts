@@ -18,10 +18,10 @@ describe('computeVisibleText', () => {
     )
   })
 
-  it('strips a thinking block in the middle of text', () => {
+  it('strips a thinking block in the middle of text, including the whitespace right after it', () => {
     expect(
       computeVisibleText('Before <thinking>hidden</thinking> after'),
-    ).toBe('Before  after')
+    ).toBe('Before after')
   })
 
   it('withholds an unclosed thinking block entirely', () => {
@@ -43,8 +43,41 @@ describe('computeVisibleText', () => {
     expect(computeVisibleText('Hello <thinking>secret')).toBe('Hello ')
     expect(computeVisibleText('Hello <thinking>secret</thi')).toBe('Hello ')
     expect(computeVisibleText('Hello <thinking>secret</thinking> world')).toBe(
-      'Hello  world',
+      'Hello world',
     )
+  })
+
+  // BUG-2: Nova Lite's real responses are always shaped
+  // `<thinking>...</thinking>\n\n<answer>` -- the blank line(s) between the
+  // closing tag and the real answer must not leak into the visible bubble.
+  describe('BUG-2: whitespace after a thinking block', () => {
+    it('strips a single leading space after the thinking block', () => {
+      expect(computeVisibleText('<thinking>notes</thinking> Real answer')).toBe(
+        'Real answer',
+      )
+    })
+
+    it('strips multiple blank lines after the thinking block', () => {
+      expect(
+        computeVisibleText('<thinking>notes</thinking>\n\nReal answer'),
+      ).toBe('Real answer')
+    })
+
+    it('strips the gap even when it arrives as its own separate chunk', () => {
+      // Mirrors how handleDeltaText re-derives visible text from the whole
+      // accumulated buffer on every chunk, not just the newest one.
+      expect(computeVisibleText('<thinking>notes</thinking>')).toBe('')
+      expect(computeVisibleText('<thinking>notes</thinking>\n')).toBe('')
+      expect(computeVisibleText('<thinking>notes</thinking>\n\n')).toBe('')
+      expect(computeVisibleText('<thinking>notes</thinking>\n\nReal')).toBe('Real')
+      expect(computeVisibleText('<thinking>notes</thinking>\n\nReal answer')).toBe(
+        'Real answer',
+      )
+    })
+
+    it('trims leading whitespace even with no thinking block at all', () => {
+      expect(computeVisibleText('  \nReal answer')).toBe('Real answer')
+    })
   })
 })
 
@@ -133,6 +166,28 @@ describe('createLiveChatStream', () => {
         body: JSON.stringify({ message: 'hi', sessionId: 'session-1' }),
       }),
     )
+  })
+
+  it('strips the blank-line gap Nova Lite always emits between thinking and the answer (BUG-2)', async () => {
+    // Real AgentCore responses close the thinking block and then emit the
+    // "\n\n" gap as its own delta before the answer text starts -- this is
+    // the shape that actually broke in production, unlike the test above
+    // where the tag-close and answer text happen to be adjacent.
+    const fetchImpl = vi.fn().mockResolvedValue(
+      sseResponse([
+        'data: {"event":{"contentBlockDelta":{"delta":{"text":"<thinking>secret</thinking>"},"contentBlockIndex":0}}}\n\n',
+        'data: {"event":{"contentBlockDelta":{"delta":{"text":"\\n\\n"},"contentBlockIndex":0}}}\n\n',
+        'data: {"event":{"contentBlockDelta":{"delta":{"text":"Real answer"},"contentBlockIndex":0}}}\n\n',
+        'data: {"event":{"messageStop":{"stopReason":"end_turn"}}}\n\n',
+      ]),
+    )
+
+    const stream = createLiveChatStream('hi', 'session-1', {
+      functionUrl: 'https://example.invalid/',
+      fetchImpl,
+    })
+
+    expect(await collect(stream)).toBe('Real answer')
   })
 
   it('errors the stream on a non-OK response', async () => {
