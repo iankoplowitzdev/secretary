@@ -417,6 +417,59 @@ cd frontend && npm test -- --run && echo FRONTEND_PADDING_OK
 
 ---
 
+### BUG-2: Stray leading whitespace/newlines in assistant chat bubbles
+**Story:** As a site visitor, I want the assistant's answer to start cleanly
+at the top of its bubble, so I don't see a stray leading space or a run of
+blank lines before the actual answer appears.
+
+**Depends on:** none (isolated to one frontend module)
+**Parallelizable with:** everything else — frontend-only, no backend/infra
+dependency.
+
+**Bug:** `computeVisibleText` (`frontend/src/api/liveChatStream.ts:45-65`)
+strips `<thinking>...</thinking>` blocks from Nova Lite's raw output, but
+only removes the tag pair itself — any whitespace immediately surrounding
+it is preserved verbatim in the visible text. Nova Lite's real responses are
+consistently formatted `<thinking>...</thinking>\n\n<answer>` (confirmed via
+several live invocations during US-14 testing), so after stripping, every
+real assistant message starts with at least that leftover `\n\n` — sometimes
+rendering as several blank lines before the answer, always at least some
+stray leading whitespace. This is already visible in the existing test
+suite without anyone having noticed it as a bug: `liveChatStream.test.ts:21-25`
+asserts `computeVisibleText('Before <thinking>hidden</thinking> after')` equals
+`'Before  after'` — note the double space, which is the same leftover-
+whitespace behavior showing up mid-string in that synthetic example.
+
+**Acceptance criteria:**
+- `computeVisibleText` no longer leaves stray leading whitespace at the start
+  of the returned visible text (a simple trim of the final result is
+  sufficient — internal/mid-message whitespace, e.g. paragraph breaks within
+  the real answer, must NOT be touched, only the leading edge of the whole
+  message).
+- Fix must hold up incrementally, not just on a fully-buffered string —
+  `computeVisibleText` is called on the growing raw buffer on every streamed
+  chunk (see `createLiveChatStream`'s `handleDeltaText`), so the returned
+  visible-text length must stay monotonically non-decreasing as more raw text
+  arrives (this is what the diffing in `handleDeltaText` — `visible.slice(emittedLength)`
+  — depends on to append only new text rather than re-render the whole bubble).
+- The existing `liveChatStream.test.ts:21-25` case gets its expected value
+  corrected (it currently encodes the buggy double-space behavior as
+  "correct").
+- New test coverage added for the actual real-world shape of the bug: a
+  `<thinking>...</thinking>` block followed by `\n\n` before the real answer,
+  both as a single buffer and split across streamed chunks (mirroring the
+  existing `createLiveChatStream` streaming test at
+  `liveChatStream.test.ts:112-136`, which currently doesn't exercise any
+  whitespace between the closing tag and the answer and so doesn't catch
+  this).
+
+**Stop checkpoint:**
+```
+cd frontend && npm test -- --run && echo FRONTEND_WHITESPACE_OK
+```
+
+---
+
 ## Parallelization summary
 
 | Can run together | Stories |
@@ -424,6 +477,7 @@ cd frontend && npm test -- --run && echo FRONTEND_PADDING_OK
 | Group A | US-2 (docs staged), US-3 (KB infra), US-5\*, US-6, US-9 (frontend UI against mock) |
 | Group B | US-14 (memory) — independent of the frontend/deploy track (US-8 through US-13) once US-7 is live |
 | Group C | BUG-1 (bubble/scrollbar padding fix) — independent of US-14, once US-13 is live |
+| Group D | BUG-2 (stray whitespace in bubbles) — no dependencies, can run anytime |
 | Sequential spine | US-1 → US-3/US-2 → US-4 → US-5/US-6 → US-7 → US-8 → US-10 → US-13 → US-11 → US-12 |
 
 \*US-5 technically needs US-4 (live KB) to fully verify, but its code (tool + prompt)
