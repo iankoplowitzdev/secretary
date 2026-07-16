@@ -377,12 +377,53 @@ python -m my_agent.agent --session-id "$SID" --message "What did <owner> do ther
 
 ---
 
+## Bugs
+
+Bugs get their own `BUG-N` numbering, separate from the `US-N` feature
+stories above, but otherwise follow the same format (Story/Depends
+on/Acceptance criteria/Stop checkpoint) so they can be worked the same way.
+
+### BUG-1: Chat message bubbles touch the scrollbar (no list padding)
+**Story:** As a site visitor, I want visible spacing between chat bubbles and
+the message list's scrollbar, so message content doesn't visually collide
+with the scrollbar once a conversation is long enough to scroll.
+
+**Depends on:** US-13 (fixes against the same `MessageList`/`App.css` that
+story last touched)
+**Parallelizable with:** US-11, US-12, US-14 — frontend-only, CSS-only fix,
+unrelated to backend/infra.
+
+**Bug:** `.message-list` (`frontend/src/App.css:22-31`) sets `padding: 0`. As
+soon as the list overflows and `overflow-y: auto` shows a scrollbar, bubbles
+run flush to the scrollbar track with no gap. Most visible on right-aligned
+user bubbles (`.message-user { align-self: flex-end; }` at `App.css:40-43`),
+since the scrollbar sits at that same edge.
+
+**Acceptance criteria:**
+- `.message-list` gets horizontal padding (e.g. `padding: 0 8px`) so bubbles
+  never touch the scrollbar track on either side, user (right) or assistant
+  (left).
+- `.message`'s existing `max-width: 80%` still reads sensibly against the
+  now-padded container — no separate width adjustment needed, just confirm it
+  still looks right.
+- Verified visually with a conversation long enough to actually force a
+  scrollbar (resting-state/no-scroll layout looking fine isn't sufficient —
+  this bug only shows up once the list overflows).
+
+**Stop checkpoint:**
+```
+cd frontend && npm test -- --run && echo FRONTEND_PADDING_OK
+```
+
+---
+
 ## Parallelization summary
 
 | Can run together | Stories |
 |---|---|
 | Group A | US-2 (docs staged), US-3 (KB infra), US-5\*, US-6, US-9 (frontend UI against mock) |
 | Group B | US-14 (memory) — independent of the frontend/deploy track (US-8 through US-13) once US-7 is live |
+| Group C | BUG-1 (bubble/scrollbar padding fix) — independent of US-14, once US-13 is live |
 | Sequential spine | US-1 → US-3/US-2 → US-4 → US-5/US-6 → US-7 → US-8 → US-10 → US-13 → US-11 → US-12 |
 
 \*US-5 technically needs US-4 (live KB) to fully verify, but its code (tool + prompt)
