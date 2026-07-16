@@ -1,10 +1,22 @@
+/* .chat-app deliberately spans the full viewport width (no max-width here)
+   so .message-list's native scrollbar renders at the true screen edge
+   (BUG-1) rather than at the edge of a centered column. The 720px "reading
+   column" width instead lives on .chat-header/.message-list/.message-input
+   individually, each centered the same way, so the header/input/bubbles
+   still line up visually -- see .message-list's own comment for why it
+   targets 688px rather than 720px to match. */
 .chat-app {
   display: flex;
   flex-direction: column;
   height: 100vh;
+  width: 100%;
+}
+
+.chat-header {
   max-width: 720px;
+  width: 100%;
   margin: 0 auto;
-  padding: 16px;
+  padding: 16px 16px 0;
   box-sizing: border-box;
 }
 
@@ -23,11 +35,21 @@
   flex: 1;
   overflow-y: auto;
   list-style: none;
-  padding: 0;
-  margin: 0 0 16px;
+  margin: 0;
+  /* Centers a content column matching .chat-header/.message-input's actual
+     content width -- those are max-width: 720px *border-box* boxes with
+     16px side padding of their own, so their real content width is
+     720 - 32 = 688px. Target 688 here too (not 720) so bubbles don't sit
+     wider than the header text/input controls above and below them. 16px
+     floor so narrow/mobile viewports still get a flat edge gutter instead
+     of the calc() going negative. */
+  padding: 12px max(16px, calc((100% - 688px) / 2));
+  border-top: 1px solid var(--border, #333);
+  border-bottom: 1px solid var(--border, #333);
   display: flex;
   flex-direction: column;
   gap: 12px;
+  box-sizing: border-box;
 }
 
 .message {
@@ -79,10 +101,18 @@
 }
 
 .message-input {
+  max-width: 720px;
+  width: 100%;
+  margin: 0 auto;
   display: flex;
   gap: 8px;
-  border-top: 1px solid var(--border, #333);
-  padding-top: 12px;
+  /* No border-top here -- .message-list's own border-bottom (BUG-1) now
+     sits directly above this, so a second rule here would double up. Top
+     and bottom padding equal (16px) so the gap above the input (from this
+     padding, .message-list no longer contributes its own margin here) and
+     below it (screen edge) match. */
+  padding: 16px;
+  box-sizing: border-box;
 }
 
 .message-input textarea {
